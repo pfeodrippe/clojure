@@ -8011,10 +8011,34 @@ public static void stormEnhancedReplEval(Object form) {
             ((IFn)(maybeExecuteStormSpecials.deref())).invoke(form);            
         } catch (Exception e) {}        
 }
+
+private static boolean bootstrapInitialized = false;
+
+private static Object applyBootstrapHook(String hookName, Object form) {
+    try {
+        Var hookVar = Var.find(Symbol.create("clojure.compiler.bootstrap", hookName));
+        if (hookVar != null && hookVar.isBound()) {
+            bootstrapInitialized = true;  // Mark as initialized once we find the namespace
+            Object hookFn = hookVar.deref();
+            if (hookFn instanceof IFn) {
+                return ((IFn)hookFn).invoke(form);
+            }
+        }
+    } catch (Exception e) {
+        // Only log errors after bootstrap namespace has been loaded
+        if (bootstrapInitialized) {
+            System.err.println("Error applying bootstrap hook " + hookName + ": " + e.getMessage());
+        }
+    }
+    return form;
+}
     
 public static Object eval(Object form, boolean freshLoader) {
 
     stormEnhancedReplEval(form);
+    
+    // Apply bootstrap eval hook if available
+    form = applyBootstrapHook("apply-eval-hook", form);
     
 	boolean createdLoader = false;
 
