@@ -55,6 +55,15 @@
     (= type 'long) "J"
     (= type 'float) "F"
     (= type 'double) "D"
+    ;; Handle array types
+    (= type 'int-array) "[I"
+    (= type 'long-array) "[J"
+    (= type 'float-array) "[F"
+    (= type 'double-array) "[D"
+    (= type 'byte-array) "[B"
+    (= type 'char-array) "[C"
+    (= type 'short-array) "[S"
+    (= type 'boolean-array) "[Z"
     (symbol? type) (str "L" (str/replace (name type) #"\." "/") ";")
     (class? type) (Type/getDescriptor type)
     (string? type) (if (.startsWith type "L")
@@ -592,4 +601,411 @@
   (def add-method (.getMethod my-class "add" (into-array Class [Integer/TYPE Integer/TYPE])))
   (.invoke add-method nil (object-array [10 32]))
   ;; => 42
+  )
+
+;;; ============================================================================
+;;; Phase 7: Control Flow, Objects, and Arrays
+;;; ============================================================================
+
+;;; --- Labels and Jumps (Control Flow) ---
+
+(defn create-label
+  "Create a new Label for jump targets."
+  []
+  (clojure.asm.Label.))
+
+(defn mark-label
+  "Mark a label at the current position in bytecode."
+  [ctx label]
+  (let [{:keys [method-visitor]} ctx]
+    (.visitLabel method-visitor label)
+    ctx))
+
+(defn emit-goto
+  "Unconditional jump to a label."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/GOTO label)
+  ctx)
+
+(defn emit-if-eq
+  "Jump to label if top two ints on stack are equal (pops 2)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IF_ICMPEQ label)
+  (pop-stack ctx 2))
+
+(defn emit-if-ne
+  "Jump to label if top two ints on stack are not equal (pops 2)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IF_ICMPNE label)
+  (pop-stack ctx 2))
+
+(defn emit-if-lt
+  "Jump to label if second < top (int comparison, pops 2)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IF_ICMPLT label)
+  (pop-stack ctx 2))
+
+(defn emit-if-le
+  "Jump to label if second <= top (int comparison, pops 2)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IF_ICMPLE label)
+  (pop-stack ctx 2))
+
+(defn emit-if-gt
+  "Jump to label if second > top (int comparison, pops 2)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IF_ICMPGT label)
+  (pop-stack ctx 2))
+
+(defn emit-if-ge
+  "Jump to label if second >= top (int comparison, pops 2)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IF_ICMPGE label)
+  (pop-stack ctx 2))
+
+(defn emit-ifnull
+  "Jump to label if top of stack is null (pops 1)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IFNULL label)
+  (pop-stack ctx 1))
+
+(defn emit-ifnonnull
+  "Jump to label if top of stack is not null (pops 1)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IFNONNULL label)
+  (pop-stack ctx 1))
+
+(defn emit-ifeq
+  "Jump to label if top int == 0 (pops 1)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IFEQ label)
+  (pop-stack ctx 1))
+
+(defn emit-ifne
+  "Jump to label if top int != 0 (pops 1)."
+  [ctx label]
+  (.visitJumpInsn (:method-visitor ctx) Opcodes/IFNE label)
+  (pop-stack ctx 1))
+
+;;; --- Object Creation ---
+
+(defn emit-new
+  "Create a new object instance (pushes reference, not yet initialized).
+  class-name should be internal name like 'java/lang/String'."
+  [ctx class-name]
+  (let [{:keys [method-visitor]} ctx
+        internal-name (str/replace class-name #"\." "/")]
+    (.visitTypeInsn method-visitor Opcodes/NEW internal-name)
+    (push-stack ctx 1)))
+
+(defn emit-dup
+  "Duplicate top of stack (pushes copy of top value)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/DUP)
+  (push-stack ctx 1))
+
+(defn emit-new-object
+  "Complete object creation pattern: NEW + DUP + args + INVOKESPECIAL <init>.
+  
+  Example:
+    (emit-new-object ctx \"java/lang/String\" [String] 
+                     (fn [c] (emit-const c \"hello\")))
+    ;; Equivalent to: new String(\"hello\")
+  "
+  [ctx class-name constructor-param-types args-fn]
+  (let [internal-name (str/replace class-name #"\." "/")]
+    (-> ctx
+        (emit-new internal-name)
+        (emit-dup)
+        (args-fn)  ; Push constructor arguments
+        (emit-invoke-special internal-name "<init>" constructor-param-types 'void))))
+
+;;; --- Array Operations ---
+
+(defn emit-newarray
+  "Create a new primitive array. 
+  type should be one of: boolean, char, float, double, byte, short, int, long
+  Size should be on stack (int)."
+  [ctx array-type]
+  (let [{:keys [method-visitor]} ctx
+        type-code ({:boolean Opcodes/T_BOOLEAN
+                    :char Opcodes/T_CHAR
+                    :float Opcodes/T_FLOAT
+                    :double Opcodes/T_DOUBLE
+                    :byte Opcodes/T_BYTE
+                    :short Opcodes/T_SHORT
+                    :int Opcodes/T_INT
+                    :long Opcodes/T_LONG
+                    'boolean Opcodes/T_BOOLEAN
+                    'char Opcodes/T_CHAR
+                    'float Opcodes/T_FLOAT
+                    'double Opcodes/T_DOUBLE
+                    'byte Opcodes/T_BYTE
+                    'short Opcodes/T_SHORT
+                    'int Opcodes/T_INT
+                    'long Opcodes/T_LONG} array-type)]
+    (.visitIntInsn method-visitor Opcodes/NEWARRAY type-code)
+    ctx))  ; Stack: size -> arrayref (same depth)
+
+(defn emit-anewarray
+  "Create a new object array.
+  element-type-name should be internal name like 'java/lang/String'
+  Size should be on stack (int)."
+  [ctx element-type-name]
+  (let [{:keys [method-visitor]} ctx
+        internal-name (str/replace element-type-name #"\." "/")]
+    (.visitTypeInsn method-visitor Opcodes/ANEWARRAY internal-name)
+    ctx))  ; Stack: size -> arrayref (same depth)
+
+(defn emit-iaload
+  "Load int from array (pops arrayref + index, pushes value)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/IALOAD)
+  (-> ctx (pop-stack 2) (push-stack 1)))
+
+(defn emit-iastore
+  "Store int to array (pops arrayref + index + value)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/IASTORE)
+  (pop-stack ctx 3))
+
+(defn emit-aaload
+  "Load object from array (pops arrayref + index, pushes value)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/AALOAD)
+  (-> ctx (pop-stack 2) (push-stack 1)))
+
+(defn emit-aastore
+  "Store object to array (pops arrayref + index + value)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/AASTORE)
+  (pop-stack ctx 3))
+
+(defn emit-arraylength
+  "Get array length (pops arrayref, pushes int length)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/ARRAYLENGTH)
+  ctx)  ; Pop ref, push int = same depth
+
+;;; --- Type Casting and Checking ---
+
+(defn emit-checkcast
+  "Cast object to specified type (pops objectref, pushes casted ref).
+  type-name should be internal name like 'java/lang/String'."
+  [ctx type-name]
+  (let [{:keys [method-visitor]} ctx
+        internal-name (str/replace type-name #"\." "/")]
+    (.visitTypeInsn method-visitor Opcodes/CHECKCAST internal-name)
+    ctx))  ; Stack depth unchanged
+
+(defn emit-instanceof
+  "Check if object is instance of type (pops objectref, pushes int 0/1).
+  type-name should be internal name like 'java/lang/String'."
+  [ctx type-name]
+  (let [{:keys [method-visitor]} ctx
+        internal-name (str/replace type-name #"\." "/")]
+    (.visitTypeInsn method-visitor Opcodes/INSTANCEOF internal-name)
+    ctx))  ; Pop ref, push int = same depth
+
+;;; --- Type Conversions ---
+
+(defn emit-i2l
+  "Convert int to long (pops int, pushes long - increases stack by 1)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/I2L)
+  (-> ctx (pop-stack 1) (push-stack 2)))
+
+(defn emit-l2i
+  "Convert long to int (pops long, pushes int - decreases stack by 1)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/L2I)
+  (-> ctx (pop-stack 2) (push-stack 1)))
+
+(defn emit-i2f
+  "Convert int to float."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/I2F)
+  ctx)
+
+(defn emit-i2d
+  "Convert int to double (pops int, pushes double - increases stack by 1)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/I2D)
+  (-> ctx (pop-stack 1) (push-stack 2)))
+
+(defn emit-f2i
+  "Convert float to int."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/F2I)
+  ctx)
+
+(defn emit-d2i
+  "Convert double to int (pops double, pushes int - decreases stack by 1)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/D2I)
+  (-> ctx (pop-stack 2) (push-stack 1)))
+
+;;; --- Stack Manipulation ---
+
+(defn emit-pop
+  "Pop top value from stack (discard it)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/POP)
+  (pop-stack ctx 1))
+
+(defn emit-pop2
+  "Pop top 2 values from stack (or 1 long/double)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/POP2)
+  (pop-stack ctx 2))
+
+(defn emit-swap
+  "Swap top two values on stack (both must be size 1)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/SWAP)
+  ctx)  ; Stack depth unchanged
+
+;;; --- Comparison Operations ---
+
+(defn emit-lcmp
+  "Compare two longs (pops 2 longs, pushes int: -1, 0, or 1)."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/LCMP)
+  (-> ctx (pop-stack 4) (push-stack 1)))
+
+(defn emit-fcmpl
+  "Compare two floats (pops 2 floats, pushes int: -1, 0, or 1).
+  Returns -1 on NaN."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/FCMPL)
+  (-> ctx (pop-stack 2) (push-stack 1)))
+
+(defn emit-dcmpl
+  "Compare two doubles (pops 2 doubles, pushes int: -1, 0, or 1).
+  Returns -1 on NaN."
+  [ctx]
+  (.visitInsn (:method-visitor ctx) Opcodes/DCMPL)
+  (-> ctx (pop-stack 4) (push-stack 1)))
+
+;;; --- Helper Functions for Common Patterns ---
+
+(defn emit-if-then-else
+  "Emit if-then-else pattern.
+  
+  condition-fn: function that emits condition and comparison (should leave int on stack for IFEQ)
+  then-fn: function that emits 'then' branch
+  else-fn: function that emits 'else' branch
+  
+  Example:
+    (emit-if-then-else ctx
+      (fn [c] (-> c (emit-load-arg 0) (emit-const 10)))  ; Load x, load 10
+      (fn [c] (-> c (emit-const 1) (emit-return)))       ; return 1
+      (fn [c] (-> c (emit-const 0) (emit-return))))      ; return 0
+  "
+  [ctx condition-fn then-fn else-fn]
+  (let [else-label (create-label)
+        end-label (create-label)]
+    (-> ctx
+        (condition-fn)
+        ;; Compare result (assumes int comparison leaves result on stack)
+        (emit-if-le else-label)  ; Jump to else if <=
+        (then-fn)
+        (emit-goto end-label)
+        (mark-label else-label)
+        (else-fn)
+        (mark-label end-label))))
+
+(defn allocate-local
+  "Allocate a new local variable slot, returning [updated-ctx, var-index].
+  type should be a symbol like 'int, 'long, etc."
+  [ctx type]
+  (let [current-index (:local-index ctx)
+        slot-size (type-size type)
+        next-index (+ current-index slot-size)]
+    [(assoc ctx :local-index next-index) current-index]))
+
+(comment
+  ;; Phase 7 Examples
+  
+  ;; Example 1: if-else
+  (def if-else-class
+    (-> (create-class-builder "IfElseDemo")
+        (add-method {:name "max"
+                     :params ['int 'int]
+                     :return 'int
+                     :static? true}
+                    (fn [ctx]
+                      (let [else-label (create-label)
+                            end-label (create-label)]
+                        (-> ctx
+                            (emit-load-arg 0)  ; Load first arg
+                            (emit-load-arg 1)  ; Load second arg
+                            (emit-if-le else-label)  ; If first <= second, goto else
+                            ;; Then branch: return first arg
+                            (emit-load-arg 0)
+                            (emit-return)
+                            ;; Else branch: return second arg
+                            (mark-label else-label)
+                            (emit-load-arg 1)
+                            (emit-return)
+                            (mark-label end-label)))))
+        (finalize-class)))
+  
+  ;; Example 2: Object creation
+  (def object-class
+    (-> (create-class-builder "ObjectDemo")
+        (add-method {:name "createString"
+                     :params []
+                     :return 'java.lang.String
+                     :static? true}
+                    (fn [ctx]
+                      (-> ctx
+                          (emit-new-object "java/lang/String" ['String]
+                                          (fn [c] (emit-const c "Hello from bytecode!")))
+                          (emit-return))))
+        (finalize-class)))
+  
+  ;; Example 3: Array operations
+  (def array-class
+    (-> (create-class-builder "ArrayDemo")
+        (add-method {:name "sumArray"
+                     :params []
+                     :return 'int
+                     :static? true}
+                    (fn [ctx]
+                      (-> ctx
+                          ;; Create int[3]
+                          (emit-const 3)
+                          (emit-newarray 'int)
+                          ;; Store in local var 0
+                          (emit-store-local 0 'java.lang.Object)
+                          ;; arr[0] = 10
+                          (emit-load-local 0 'java.lang.Object)
+                          (emit-const 0)
+                          (emit-const 10)
+                          (emit-iastore)
+                          ;; arr[1] = 20
+                          (emit-load-local 0 'java.lang.Object)
+                          (emit-const 1)
+                          (emit-const 20)
+                          (emit-iastore)
+                          ;; arr[2] = 30
+                          (emit-load-local 0 'java.lang.Object)
+                          (emit-const 2)
+                          (emit-const 30)
+                          (emit-iastore)
+                          ;; return arr[0] + arr[1] + arr[2]
+                          (emit-load-local 0 'java.lang.Object)
+                          (emit-const 0)
+                          (emit-iaload)
+                          (emit-load-local 0 'java.lang.Object)
+                          (emit-const 1)
+                          (emit-iaload)
+                          (emit-iadd)
+                          (emit-load-local 0 'java.lang.Object)
+                          (emit-const 2)
+                          (emit-iaload)
+                          (emit-iadd)
+                          (emit-return))))
+        (finalize-class)))
   )

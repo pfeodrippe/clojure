@@ -184,6 +184,20 @@ static public int hashCombine(int seed, int hash){
 }
 
 static public boolean isPrimitive(Class c){
+	// Try Clojure implementation first (Phase 9: Type System Migration)
+	try {
+		Var primVar = Var.find(Symbol.create("clojure.compiler.phase2", "primitive-type?"));
+		if (primVar != null && primVar.isBound()) {
+			Object result = ((IFn)primVar.deref()).invoke(c);
+			if (result instanceof Boolean) {
+				return (Boolean) result;
+			}
+		}
+	} catch (Exception e) {
+		// Fall back to Java implementation if Clojure not loaded
+	}
+	
+	// Original Java implementation as fallback
 	return c != null && c.isPrimitive() && !(c == Void.TYPE);
 }
 

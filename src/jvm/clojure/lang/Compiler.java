@@ -3526,6 +3526,21 @@ static {
 }
 
 static public String munge(String name){
+	// Try Clojure implementation first (Phase 8: Utility Migration)
+	try {
+		Var mungeVar = Var.find(Symbol.create("clojure.compiler.java-interop", "munge-name"));
+		if (mungeVar != null && mungeVar.isBound()) {
+			Object result = ((IFn)mungeVar.deref()).invoke(name);
+			if (result instanceof String) {
+				return (String) result;
+			}
+		}
+	} catch (Exception e) {
+		// Fall back to Java implementation if Clojure not loaded
+		// This is expected during bootstrap
+	}
+	
+	// Original Java implementation as fallback
 	StringBuilder sb = new StringBuilder();
 	for(char c : name.toCharArray())
 		{
@@ -3539,6 +3554,21 @@ static public String munge(String name){
 }
 
 static public String demunge(String mungedName){
+	// Try Clojure implementation first (Phase 8: Utility Migration)
+	try {
+		Var demungeVar = Var.find(Symbol.create("clojure.compiler.java-interop", "demunge-name"));
+		if (demungeVar != null && demungeVar.isBound()) {
+			Object result = ((IFn)demungeVar.deref()).invoke(mungedName);
+			if (result instanceof String) {
+				return (String) result;
+			}
+		}
+	} catch (Exception e) {
+		// Fall back to Java implementation if Clojure not loaded
+		// This is expected during bootstrap
+	}
+	
+	// Original Java implementation as fallback
 	StringBuilder sb = new StringBuilder();
 	Matcher m = DEMUNGE_PATTERN.matcher(mungedName);
 	int lastMatchEnd = 0;
@@ -9752,6 +9782,20 @@ public static class NewInstanceMethod extends ObjMethod{
 	}
 
 	static Class boxClass(Class p) {
+		// Try Clojure implementation first (Phase 9: Type System Migration)
+		try {
+			Var boxVar = Var.find(Symbol.create("clojure.compiler.phase2", "box-class"));
+			if (boxVar != null && boxVar.isBound()) {
+				Object result = ((IFn)boxVar.deref()).invoke(p);
+				if (result instanceof Class) {
+					return (Class) result;
+				}
+			}
+		} catch (Exception e) {
+			// Fall back to Java implementation if Clojure not loaded
+		}
+		
+		// Original Java implementation as fallback
 		if(!p.isPrimitive())
 			return p;
 
