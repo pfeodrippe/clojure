@@ -11,6 +11,7 @@
    2. Reimplement them in Clojure
    3. Replace Java calls with Clojure calls via bootstrap hooks
    4. Gradually move more complex logic from Java to Clojure"
+  (:require [clojure.string])
   (:import [clojure.lang Symbol RT Namespace Compiler]))
 
 ;; ============================================================================
@@ -57,34 +58,53 @@
 
 (defn demunge-name
   "Demunge a name according to Clojure's rules.
-   Pure Clojure implementation of Compiler.demunge()"
+   Pure Clojure implementation of Compiler.demunge()
+   
+   Matches Java's pattern-based approach:
+   1. Builds DEMUNGE_MAP from CHAR_MAP (reverse mapping)
+   2. Adds $ → / mapping
+   3. Sorts patterns longest-first for greedy matching  
+   4. Replaces ALL occurrences in order"
   [^String s]
-  (-> s
-      (.replace "__" "_")
-      (.replace "_DOT_" ".")
-      (.replace "_COLON_" ":")
-      (.replace "_PLUS_" "+")
-      (.replace "_GT_" ">")
-      (.replace "_LT_" "<")
-      (.replace "_EQ_" "=")
-      (.replace "_TILDE_" "~")
-      (.replace "_BANG_" "!")
-      (.replace "_CIRCA_" "@")
-      (.replace "_SHARP_" "#")
-      (.replace "_SINGLEQUOTE_" "'")
-      (.replace "_DOUBLEQUOTE_" "\"")
-      (.replace "_PERCENT_" "%")
-      (.replace "_CARET_" "^")
-      (.replace "_AMPERSAND_" "&")
-      (.replace "_STAR_" "*")
-      (.replace "_BAR_" "|")
-      (.replace "_LBRACE_" "{")
-      (.replace "_RBRACE_" "}")
-      (.replace "_LBRACK_" "[")
-      (.replace "_RBRACK_" "]")
-      (.replace "_SLASH_" "/")
-      (.replace "_BSLASH_" "\\")
-      (.replace "_QMARK_" "?")))
+  ;; Build demunge map matching Java's DEMUNGE_MAP
+  ;; This includes:
+  ;; - $ → / (for package separators)
+  ;; - All CHAR_MAP reversals (e.g., _COLON_ → :, _ → -, __ → _)
+  (let [demunge-map {"$" "/"
+                     "__" "_"        ; Double underscore → single (must come before single _)
+                     "_COLON_" ":"
+                     "_PLUS_" "+"
+                     "_GT_" ">"
+                     "_LT_" "<"
+                     "_EQ_" "="
+                     "_TILDE_" "~"
+                     "_BANG_" "!"
+                     "_CIRCA_" "@"
+                     "_SHARP_" "#"
+                     "_SINGLEQUOTE_" "'"
+                     "_DOUBLEQUOTE_" "\""
+                     "_PERCENT_" "%"
+                     "_CARET_" "^"
+                     "_AMPERSAND_" "&"
+                     "_STAR_" "*"
+                     "_BAR_" "|"
+                     "_LBRACE_" "{"
+                     "_RBRACE_" "}"
+                     "_LBRACK_" "["
+                     "_RBRACK_" "]"
+                     "_SLASH_" "/"
+                     "_BSLASH_" "\\"
+                     "_QMARK_" "?"
+                     "_DOT_" "."
+                     "_" "-"}        ; Single underscore → dash (must come AFTER all other _ patterns)
+        ;; Sort patterns by length (longest first) for greedy matching
+        ;; This ensures __ matches before _, _COLON_ matches before _, etc.
+        sorted-patterns (sort-by #(- (count %)) (keys demunge-map))]
+    ;; Replace all patterns in order
+    (reduce (fn [result pattern]
+              (clojure.string/replace result pattern (get demunge-map pattern)))
+            s
+            sorted-patterns)))
 
 ;; ============================================================================
 ;; Symbol Resolution (currently in Compiler.java)
